@@ -532,46 +532,80 @@ class WC_Bale_Product_Manager {
         $step = $session['step'];
         $data = $session['data'];
 
-        // ثبت لاگ برای دیباگ
-        file_put_contents(ABSPATH . 'bale-step.txt', "STEP: " . $step . " | TEXT: " . $text . "\n", FILE_APPEND);
+        // تبدیل خودکار اعداد فارسی به انگلیسی برای جلوگیری از خطای کیبورد
+        $persian_nums = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+        $english_nums = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+        $text_clean = str_replace($persian_nums, $english_nums, $text);
+        
+        $text_lower = strtolower(trim($text_clean));
+
+        // ==========================================
+        // 🔙 سیستم بازگشت به مرحله قبل (ویرایش مراحل)
+        // ==========================================
+        if ($text_lower === '/back') {
+            if ($step === 'title') {
+                $this->bale_send($chat_id, "شما در مرحله اول هستید. برای لغو کامل عملیات، دستور /cancel را بفرستید.");
+                return;
+            } elseif ($step === 'category_hierarchy') {
+                $session['step'] = 'title';
+                set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
+                $current_title = $data['title'] ?? 'نامشخص';
+                $this->bale_send($chat_id, "🔙 برگشتیم به مرحله قبل!\n\n📝 مرحله ۱ از ۴\nعنوان جدید محصول را بنویسید:\n(عنوان قبلی شما: {$current_title})");
+                return;
+            } elseif ($step === 'description') {
+                $data['current_parent'] = 0;
+                $data['page'] = 1;
+                $session['step'] = 'category_hierarchy';
+                $session['data'] = $data;
+                $header_msg = "🔙 برگشتیم به انتخاب دسته‌بندی!\n\n📂 مرحله ۲ از ۴\nدسته‌بندی اصلی (مادر) را انتخاب کنید:\n\n";
+                $this->bale_render_category_page($chat_id, $session['data'], $header_msg);
+                return;
+            } elseif ($step === 'photo') {
+                $session['step'] = 'description';
+                set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
+                $current_desc = !empty($data['description']) ? $data['description'] : 'بدون توضیحات (رد شده)';
+                $this->bale_send($chat_id, "🔙 برگشتیم به توضیحات!\n\n📄 مرحله ۳ از ۴\nتوضیحات محصول را بنویسید:\n(توضیحات قبلی شما: {$current_desc})\n\nبرای رد کردن عدد 0 بزنید.");
+                return;
+            }
+        }
+        // ==========================================
+
+        // ثبت لاگ
+        file_put_contents(ABSPATH . 'bale-step.txt', "STEP: " . $step . " | TEXT: " . $text_clean . "\n", FILE_APPEND);
 
         switch ($step) {
             case 'title':
-                $data['title'] = $text;
+                $data['title'] = $text; // ثبت دقیق عنوان کاربر (بدون تغییر)
                 $data['current_parent'] = 0;
                 $data['page'] = 1;
                 
-                $header_msg = "✅ عنوان ثبت شد!\n\n📂 مرحله ۲ از ۴\nدسته‌بندی اصلی (مادر) را انتخاب کنید:\n\n";
+                $header_msg = "✅ عنوان ثبت شد!\n\n📂 مرحله ۲ از ۴\nبرای مشاهده زیرمجموعه‌ها، **عدد کنار هر گزینه** را بفرستید:\n\n";
                 $this->bale_render_category_page($chat_id, $data, $header_msg);
                 break;
 
             case 'category_hierarchy':
                 $cat_mapping = $data['cat_mapping'] ?? [];
-                $current_parent = $data['current_parent'] ?? 0;
-                $page = $data['page'] ?? 1;
+                $current_parent = intval($data['current_parent'] ?? 0);
+                $page = intval($data['page'] ?? 1);
 
-                $text = strtolower(trim($text));
-
-                if ($text === 'n') {
-                    $data['page']++; // صفحه بعدی
-                } elseif ($text === 'p') {
-                    $data['page'] = max(1, $data['page'] - 1); // صفحه قبلی
-                } elseif ($text === '0') {
+                if ($text_lower === 'n') {
+                    $data['page'] = $page + 1;
+                } elseif ($text_lower === 'p') {
+                    $data['page'] = max(1, $page - 1);
+                } elseif ($text_lower === '0') {
                     $data['category'] = $current_parent;
                     unset($data['cat_mapping'], $data['current_parent'], $data['page']);
                     $session = ['step' => 'description', 'data' => $data];
                     set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
-                    $this->bale_send($chat_id, "✅ دسته‌بندی ثبت شد!\n\n📄 مرحله ۳ از ۴\nتوضیحات محصول را بنویسید:\nبرای رد کردن عدد 0 بزنید");
+                    $this->bale_send($chat_id, "✅ دسته‌بندی نهایی ثبت شد!\n\n📄 مرحله ۳ از ۴\nتوضیحات محصول را بنویسید:\nبرای رد کردن عدد 0 بزنید\n\n/back 🔙 بازگشت و ویرایش دسته‌بندی");
                     return;
-                } elseif ($text === 'b' && $current_parent > 0) {
-                    // بازگشت به سطح قبل
+                } elseif ($text_lower === 'b' && $current_parent > 0) {
                     $term = get_term($current_parent, 'product_cat');
-                    $data['current_parent'] = ($term && !is_wp_error($term)) ? $term->parent : 0;
+                    $data['current_parent'] = ($term && !is_wp_error($term)) ? intval($term->parent) : 0;
                     $data['page'] = 1;
-                } elseif (is_numeric($text) && isset($cat_mapping[intval($text)])) {
-                    $target_cat = $cat_mapping[intval($text)];
+                } elseif (is_numeric($text_lower) && isset($cat_mapping[intval($text_lower)])) {
+                    $target_cat = intval($cat_mapping[intval($text_lower)]);
 
-                    // بررسی اینکه آیا زیرمجموعه دارد یا خیر
                     $children = get_terms([
                         'taxonomy'   => 'product_cat',
                         'hide_empty' => false,
@@ -579,27 +613,24 @@ class WC_Bale_Product_Manager {
                     ]);
 
                     if (is_wp_error($children) || empty($children)) {
-                        // زیرمجموعه ندارد -> انتخاب نهایی و رفتن به توضیحات
                         $data['category'] = $target_cat;
                         unset($data['cat_mapping'], $data['current_parent'], $data['page']);
                         $session = ['step' => 'description', 'data' => $data];
                         set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
-                        $this->bale_send($chat_id, "✅ دسته‌بندی ثبت شد!\n\n📄 مرحله ۳ از ۴\nتوضیحات محصول را بنویسید:\nبرای رد کردن عدد 0 بزنید");
+                        $this->bale_send($chat_id, "✅ دسته‌بندی ثبت شد! (این دسته‌بندی زیرمجموعه‌ای نداشت)\n\n📄 مرحله ۳ از ۴\nتوضیحات محصول را بنویسید:\nبرای رد کردن عدد 0 بزنید\n\n/back 🔙 بازگشت و ویرایش دسته‌بندی");
                         return;
                     } else {
-                        // زیرمجموعه دارد -> ورود به سطح بعدی
                         $data['current_parent'] = $target_cat;
                         $data['page'] = 1;
                     }
                 } else {
-                    $this->bale_send($chat_id, "❌ ورودی نامعتبر! لطفاً فقط عدد گزینه یا حروف راهنما (n, p, b) را بفرستید:");
+                    $this->bale_send($chat_id, "❌ ورودی نامعتبر! لطفاً فقط عدد گزینه یا حروف راهنما را بفرستید:");
                     return;
                 }
 
-                // آماده‌سازی عنوان برای سطح فعلی
                 $header_msg = "";
                 if ($data['current_parent'] == 0) {
-                    $header_msg = "📂 دسته‌بندی اصلی (مادر) را انتخاب کنید:\n\n";
+                    $header_msg = "📂 دسته‌بندی‌های اصلی:\n\n";
                 } else {
                     $term = get_term($data['current_parent'], 'product_cat');
                     $header_msg = "📂 زیرمجموعه‌های «" . $term->name . "»:\n\n";
@@ -609,10 +640,10 @@ class WC_Bale_Product_Manager {
                 break;
 
             case 'description':
-                $data['description'] = ($text === '0') ? '' : $text;
+                $data['description'] = ($text_lower === '0') ? '' : $text; // ثبت دقیق توضیحات کاربر
                 $session = ['step' => 'photo', 'data' => $data];
                 set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
-                $this->bale_send($chat_id, "✅ توضیحات ثبت شد!\n\n📸 مرحله ۴ از ۴\nعکس محصول را ارسال کنید:\nبرای رد کردن عدد 0 بزنید");
+                $this->bale_send($chat_id, "✅ توضیحات ثبت شد!\n\n📸 مرحله ۴ از ۴\nعکس محصول را ارسال کنید:\nبرای رد کردن عدد 0 بزنید\n\n/back 🔙 ویرایش توضیحات");
                 break;
 
             case 'photo':
@@ -626,14 +657,13 @@ class WC_Bale_Product_Manager {
         }
     }
 
-    // تابع جدید برای ساخت و صفحه‌بندی لیست دسته‌بندی‌ها
     public function bale_render_category_page($chat_id, $data, $header_msg) {
-        $per_page = 15; // تعداد نمایش در هر صفحه (قابل تغییر است)
+        $per_page = 15; 
         
         $cats = get_terms([
             'taxonomy'   => 'product_cat',
             'hide_empty' => false,
-            'parent'     => $data['current_parent']
+            'parent'     => intval($data['current_parent'])
         ]);
 
         if (is_wp_error($cats) || empty($cats)) {
@@ -641,7 +671,6 @@ class WC_Bale_Product_Manager {
             return;
         }
 
-        // محاسبات صفحه‌بندی
         $total_cats = count($cats);
         $total_pages = ceil($total_cats / $per_page);
         if ($data['page'] > $total_pages) $data['page'] = $total_pages;
@@ -656,13 +685,12 @@ class WC_Bale_Product_Manager {
         
         foreach ($current_cats as $cat) {
             $cat_text .= $i . ". " . $cat->name . "\n";
-            $cat_mapping[$i] = $cat->term_id; // ذخیره شناسه واقعی دسته‌بندی
+            $cat_mapping[$i] = $cat->term_id; 
             $i++;
         }
 
         $data['cat_mapping'] = $cat_mapping;
 
-        // دکمه‌های راهنما
         $cat_text .= "\n";
         if ($data['page'] < $total_pages) {
             $cat_text .= "n. 🔽 صفحه بعدی\n";
@@ -675,11 +703,11 @@ class WC_Bale_Product_Manager {
             $cat_text .= "0. 🚫 بدون دسته‌بندی\n";
         } else {
             $term = get_term($data['current_parent'], 'product_cat');
-            $cat_text .= "0. ✅ انتخاب همین دسته‌بندی (" . $term->name . ")\n";
-            $cat_text .= "b. 🔙 بازگشت به مرحله قبل\n";
+            $cat_text .= "0. 🏁 پایان و ثبت دسته «" . $term->name . "»\n";
+            $cat_text .= "b. 🔙 بازگشت به دسته‌های بالاتر\n";
         }
 
-        $cat_text .= "\n🔢 عدد یا حرف مورد نظر را ارسال کنید (صفحه {$data['page']} از {$total_pages}):";
+        $cat_text .= "\n🔢 برای ورود به زیرمجموعه‌ها، عدد آن را بفرستید (صفحه {$data['page']} از {$total_pages}):\n\n/back 🔙 ویرایش عنوان محصول";
 
         $session = [
             'step' => 'category_hierarchy',
