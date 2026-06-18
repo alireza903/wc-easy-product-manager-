@@ -2,8 +2,8 @@
 /**
  * Plugin Name: WC Bale Product Manager
  * Plugin URI: #
- * Description: افزودن ساده محصول + ربات بله (با دکمه‌های شیشه‌ای، خواندن فایل هلو اکسل و ویرایش مراحل)
- * Version: 1.5.0
+ * Description: افزودن ساده محصول + ربات بله (با دسته‌بندی‌های مادر سفارشی، اسکن اکسل و ویرایش)
+ * Version: 1.6.0
  * Author: Admin
  * Requires at least: 5.0
  * Requires PHP: 7.4
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('WCBPM_VERSION', '1.5.0');
+define('WCBPM_VERSION', '1.6.0');
 define('WCBPM_PATH', plugin_dir_path(__FILE__));
 define('WCBPM_URL', plugin_dir_url(__FILE__));
 
@@ -108,7 +108,7 @@ function wcbpm_get_js() {
                 });
             });
 
-            // جستجوی بارکد برای یافتن شناسه هلو
+            // جستجوی بارکد در پنل سایت
             var barcodeTimer = null;
             $("#product-barcode").on("input", function() {
                 clearTimeout(barcodeTimer);
@@ -140,19 +140,16 @@ function wcbpm_get_js() {
                 }, 500);
             });
 
-            // وضعیت انتشار
             $(".wcbpm-status-btn").on("click", function() {
                 $(".wcbpm-status-btn").removeClass("active");
                 $(this).addClass("active");
                 $("#product-status").val($(this).data("status"));
             });
 
-            // ارسال فرم
             $("#wcbpm-form").on("submit", function(e) {
                 e.preventDefault();
 
                 if (isUploading) { showAlert("⏳ صبر کنید عکس آپلود شود...", "error"); return; }
-
                 var title = $("#product-title").val().trim();
                 if (!title) { showAlert("❌ عنوان محصول را وارد کنید!", "error"); $("#product-title").focus(); return; }
 
@@ -208,7 +205,6 @@ function wcbpm_get_js() {
                 $.post(wcbpm_ajax.ajax_url, { action: "wcbpm_get_recent", nonce: wcbpm_ajax.nonce },
                 function(response) { if (response.success) { $("#wcbpm-recent-list").html(response.data.html); } });
             }
-
         });
     })(jQuery);
     </script>';
@@ -218,6 +214,13 @@ function wcbpm_get_js() {
 // کلاس اصلی
 // ===================================================
 class WC_Bale_Product_Manager {
+
+    // لیست ثابت و سفارشی دسته‌بندی‌های مادر (طبق درخواست شما)
+    private $allowed_parents = [
+        'تنقلات', 'دخانیات', 'لبنیات', 'بهداشت شخصی', 
+        'لوازم آرایش و بهداشتی', 'کالای اساسی و خواروبار', 
+        'لوازم بهداشتی مصرفی', 'بهداشت خانگی', 'نان', 'میوه', 'ساندویچ'
+    ];
 
     public function __construct() {
         add_action('plugins_loaded', [$this, 'init']);
@@ -272,7 +275,7 @@ class WC_Bale_Product_Manager {
     }
 
     // ===================================================
-    // توابع اکسل و هلو (نگهداری از کدهای خودتان)
+    // توابع اکسل و هلو
     // ===================================================
     private function get_holoocode_meta_key() {
         return get_option('wcbpm_holoocode_meta_key', '_holo_sku');
@@ -324,13 +327,13 @@ class WC_Bale_Product_Manager {
 
         $rows = $this->parse_excel_file($file['tmp_name']);
 
-        if ($rows === false) wp_send_json_error(['message' => 'خطا در خواندن فایل Excel! شیت «ققنوس» پیدا نشد یا فایل خراب است.']);
+        if ($rows === false) wp_send_json_error(['message' => 'خطا در خواندن فایل Excel! شیت ققنوس پیدا نشد.']);
         if (empty($rows)) wp_send_json_error(['message' => 'شیت ققنوس پیدا شد ولی داده‌ای در آن نبود!']);
 
         update_option('wcbpm_holoodata', $rows, false);
         update_option('wcbpm_holoodata_updated', current_time('mysql'));
 
-        wp_send_json_success(['message' => 'فایل هلو با موفقیت بارگذاری شد! ' . count($rows) . ' محصول از فروشگاه ققنوس ثبت شد.']);
+        wp_send_json_success(['message' => 'فایل هلو با موفقیت بارگذاری شد! ' . count($rows) . ' محصول ثبت شد.']);
     }
 
     private function parse_excel_file($filepath) {
@@ -450,9 +453,10 @@ class WC_Bale_Product_Manager {
     public function render_panel() {
         $output = wcbpm_get_css();
         if (!is_user_logged_in()) { return $output . '<div class="wcbpm-container"><div class="wcbpm-login-msg"><p style="font-size:48px;margin:0">🔐</p><h3>ابتدا وارد شوید</h3><p>برای افزودن محصول باید وارد حساب کاربری شوید</p><a href="' . wp_login_url(get_permalink()) . '" class="wcbpm-login-btn">ورود به حساب</a></div></div>' . wcbpm_get_js(); }
-        if (!current_user_can('publish_products')) { return $output . '<div class="wcbpm-container"><div class="wcbpm-login-msg"><p style="font-size:48px;margin:0">🚫</p><h3>دسترسی ندارید!</h3><p>شما مجوز افزودن محصول ندارید</p></div></div>'; }
+        if (!current_user_can('publish_products')) { return $output . '<div class="wcbpm-container"><div class="wcbpm-login-msg"><p style="font-size:48px;margin:0">🚫</p><h3>دسترسی ندارید!</h3></div></div>'; }
 
-        $categories = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]);
+        // فقط نمایش دسته‌بندی‌های مجاز در پنل هم ایده خوبیه، اما اینجا کلشو میاریم
+        $categories = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'parent' => 0]);
         $output .= '
         <div class="wcbpm-container">
             <div class="wcbpm-header"><h2>➕ افزودن محصول</h2><span>👤 ' . esc_html(wp_get_current_user()->display_name) . '</span></div>
@@ -532,7 +536,13 @@ class WC_Bale_Product_Manager {
         $id = $product->save();
 
         if ($id) {
+            if (!empty($barcode)) {
+                $p = wc_get_product($id);
+                $p->set_sku($barcode);
+                $p->save();
+            }
             if (!empty($holoocode)) update_post_meta($id, $this->get_holoocode_meta_key(), $holoocode);
+            
             $msg = 'محصول با موفقیت اضافه شد! 🎉' . (!empty($holoocode) ? ' (شناسه هلو: ' . $holoocode . ')' : '');
             wp_send_json_success(['message' => $msg]);
         } else {
@@ -566,7 +576,7 @@ class WC_Bale_Product_Manager {
         $allowed = array_map('strval', $allowed);
 
         if (!in_array((string)$chat_id, $allowed)) {
-            $this->bale_send($chat_id, "❌ دسترسی ندارید!\nChat ID شما: {$chat_id}\nاین عدد رو به ادمین بدید");
+            $this->bale_send($chat_id, "❌ دسترسی ندارید!\nChat ID شما: {$chat_id}");
             return;
         }
 
@@ -584,7 +594,6 @@ class WC_Bale_Product_Manager {
             return;
         }
 
-        // دستور جدید برای جستجوی مستقیم
         if ($text_lower === '/scan' || $text_lower === 'اسکن') {
             $session = ['step' => 'scan_only', 'data' => []];
             set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
@@ -600,7 +609,7 @@ class WC_Bale_Product_Manager {
 
         if ($text_lower === '/list') { $this->bale_send_recent($chat_id); return; }
         if ($session['step'] === 'idle' || $text_lower === '/help') {
-            $this->bale_send($chat_id, "👋 سلام!\n\nدستورات:\n➕ /add - افزودن محصول\n🔎 /scan - جستجوی کالا در هلو\n📋 /list - محصولات اخیر\n❌ /cancel - لغو عملیات");
+            $this->bale_send($chat_id, "👋 سلام!\n\nدستورات:\n➕ /add - افزودن محصول\n🔎 /scan - جستجوی بارکد در اکسل\n📋 /list - محصولات اخیر\n❌ /cancel - لغو عملیات");
             return;
         }
 
@@ -641,9 +650,9 @@ class WC_Bale_Product_Manager {
                 if ($text === '0' || empty(trim($text))) { $this->bale_send($chat_id, "❌ بارکد نامعتبر است."); return; }
                 $found = $this->lookup_barcode_in_holoodata(trim($text));
                 if ($found) {
-                    $this->bale_send($chat_id, "✅ محصول در فایل هلو پیدا شد!\n\n📦 نام: {$found['holooName']}\n🔖 شناسه هلو: {$found['holooCode']}\n\nبرای اسکن بعدی، بارکد جدید بفرستید.\nبرای خروج /cancel بزنید.");
+                    $this->bale_send($chat_id, "✅ محصول در فایل اکسل پیدا شد!\n\n📦 نام: {$found['holooName']}\n🔖 شناسه هلو: {$found['holooCode']}\n\nبرای اسکن بعدی، بارکد جدید بفرستید.\nبرای خروج /cancel بزنید.");
                 } else {
-                    $this->bale_send($chat_id, "❌ بارکد در فایل اکسل هلو یافت نشد!\nدوباره اسکن کنید یا /cancel بزنید.");
+                    $this->bale_send($chat_id, "❌ بارکد در فایل اکسل ققنوس یافت نشد!\nدوباره اسکن کنید یا /cancel بزنید.");
                 }
                 break;
 
@@ -672,7 +681,7 @@ class WC_Bale_Product_Manager {
                 $data['stock'] = is_numeric($text) ? intval($text) : 0;
                 $session = ['step' => 'barcode', 'data' => $data];
                 set_transient('wcbpm_bale_' . $chat_id, $session, 3600);
-                $this->bale_send($chat_id, "✅ موجودی ثبت شد!\n\n🏷 مرحله ۶ از ۷\nبارکد محصول را اسکن کنید:\n(سیستم شناسه هلو را به صورت خودکار از اکسل استخراج می‌کند)\n(0 = رد کردن)\n\n/back 🔙 ویرایش مرحله قبل");
+                $this->bale_send($chat_id, "✅ موجودی ثبت شد!\n\n🏷 مرحله ۶ از ۷\nبارکد محصول را اسکن کنید:\n(شناسه هلو به صورت خودکار از اکسل خوانده می‌شود)\n(0 = رد کردن)\n\n/back 🔙 ویرایش مرحله قبل");
                 break;
 
             case 'barcode':
@@ -682,7 +691,7 @@ class WC_Bale_Product_Manager {
                     $found = $this->lookup_barcode_in_holoodata($barcode);
                     if ($found) {
                         $data['holoocode'] = $found['holooCode'];
-                        $this->bale_send($chat_id, "✅ بارکد ثبت شد!\n🎯 شناسه هلو: {$found['holooCode']}\n📦 نام در هلو: {$found['holooName']}\n\n📸 مرحله ۷ از ۷\nعکس محصول را ارسال کنید (0 = رد):");
+                        $this->bale_send($chat_id, "✅ بارکد ثبت شد!\n🎯 شناسه هلو (از اکسل): {$found['holooCode']}\n📦 نام در هلو: {$found['holooName']}\n\n📸 مرحله ۷ از ۷\nعکس محصول را ارسال کنید (0 = رد):");
                     } else {
                         $data['holoocode'] = '';
                         $this->bale_send($chat_id, "⚠️ بارکد در فایل اکسل پیدا نشد.\nشناسه هلو خالی می‌ماند.\n\n📸 مرحله ۷ از ۷\nعکس محصول را ارسال کنید (0 = رد):");
@@ -706,15 +715,34 @@ class WC_Bale_Product_Manager {
         }
     }
 
+    // ===================================================
+    // کیبورد شیشه‌ای با محدودیت دسته‌های مادر
+    // ===================================================
     private function bale_send_category_keyboard($chat_id, $parent_id = 0, $page = 1) {
         $per_page = 10; 
-        $cats = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'parent' => $parent_id]);
+        
+        if ($parent_id == 0) {
+            // فقط دسته‌های مادری که شما مشخص کردید
+            $cats = get_terms([
+                'taxonomy'   => 'product_cat',
+                'hide_empty' => false,
+                'name'       => $this->allowed_parents
+            ]);
+        } else {
+            // زیرمجموعه‌های دسته انتخاب شده
+            $cats = get_terms([
+                'taxonomy'   => 'product_cat',
+                'hide_empty' => false,
+                'parent'     => $parent_id
+            ]);
+        }
         
         if (is_wp_error($cats) || empty($cats)) {
-            $this->bale_send($chat_id, "❌ خطایی در خواندن دسته‌ها رخ داد."); return;
+            $this->bale_send($chat_id, "❌ خطایی در خواندن دسته‌ها رخ داد یا دسته‌بندی پیدا نشد."); return;
         }
 
-        $total_cats = count($cats); $total_pages = ceil($total_cats / $per_page);
+        $total_cats = count($cats); 
+        $total_pages = ceil($total_cats / $per_page);
         if ($page > $total_pages) $page = $total_pages;
         if ($page < 1) $page = 1;
 
@@ -737,13 +765,13 @@ class WC_Bale_Product_Manager {
             $term = get_term($parent_id, 'product_cat');
             $grandparent = ($term && !is_wp_error($term)) ? $term->parent : 0;
             $keyboard[] = [['text' => '✅ انتخاب همین دسته (' . $term->name . ')', 'callback_data' => 'fsel_' . $parent_id]];
-            $keyboard[] = [['text' => '🔙 بازگشت به دسته‌های بالاتر', 'callback_data' => 'nav_' . $grandparent . '_1']];
+            $keyboard[] = [['text' => '🔙 بازگشت به دسته‌های مادر', 'callback_data' => 'nav_0_1']];
         }
 
         $token = get_option('wcbpm_bale_token', '');
         if (empty($token)) return;
 
-        $msg = "✅ قیمت ثبت شد!\n\n📂 مرحله ۳ از ۷\nیک دسته‌بندی انتخاب کنید (صفحه {$page} از {$total_pages}):\n\n/back 🔙 ویرایش مرحله قبل";
+        $msg = "✅ قیمت (یا عنوان) ثبت شد!\n\n📂 مرحله ۳ از ۷\nیک دسته‌بندی انتخاب کنید (صفحه {$page} از {$total_pages}):\n\n/back 🔙 ویرایش مرحله قبل";
         $payload = json_encode(['chat_id' => $chat_id, 'text' => $msg, 'reply_markup' => ['inline_keyboard' => $keyboard]], JSON_UNESCAPED_UNICODE);
         wp_remote_post("https://tapi.bale.ai/bot{$token}/sendMessage", ['headers' => ['Content-Type' => 'application/json'], 'body' => $payload, 'timeout' => 15]);
     }
@@ -757,11 +785,20 @@ class WC_Bale_Product_Manager {
             $this->bale_send_category_keyboard($chat_id, intval($parts[1]), intval($parts[2]));
         } elseif (strpos($data_str, 'sel_') === 0) {
             $term_id = intval(str_replace('sel_', '', $data_str));
-            $children = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'parent' => $term_id]);
-            if (is_wp_error($children) || empty($children)) {
-                $this->finalize_category_selection($chat_id, $term_id);
+            $term = get_term($term_id, 'product_cat');
+            $parent_id_of_term = ($term && !is_wp_error($term)) ? $term->parent : 0;
+
+            // فقط اگر کاربر روی دسته مادر کلیک کرد، زیرمجموعه ها رو نشون بده
+            if ($parent_id_of_term == 0 || in_array(trim($term->name), $this->allowed_parents)) {
+                $children = get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false, 'parent' => $term_id]);
+                if (is_wp_error($children) || empty($children)) {
+                    $this->finalize_category_selection($chat_id, $term_id); // اگه زیردسته نداشت همینو ثبت کن
+                } else {
+                    $this->bale_send_category_keyboard($chat_id, $term_id, 1); // زیردسته هاشو بیار
+                }
             } else {
-                $this->bale_send_category_keyboard($chat_id, $term_id, 1);
+                // اگر روی زیردسته اول کلیک کرد -> ثبت نهایی کن (دیگه پایین تر نرو)
+                $this->finalize_category_selection($chat_id, $term_id);
             }
         } elseif (strpos($data_str, 'fsel_') === 0) {
             $this->finalize_category_selection($chat_id, intval(str_replace('fsel_', '', $data_str)));
@@ -790,15 +827,20 @@ class WC_Bale_Product_Manager {
         if (!empty($data['category']) && $data['category'] > 0) $product->set_category_ids([$data['category']]);
         if (!empty($data['image_id'])) $product->set_image_id($data['image_id']);
         if (!empty($data['stock']) && $data['stock'] > 0) { $product->set_manage_stock(true); $product->set_stock_quantity($data['stock']); $product->set_stock_status('instock'); }
+        if (!empty($data['barcode'])) {
+            $product->set_sku($data['barcode']);
+        }
 
         $id = $product->save();
 
         if ($id) {
-            if (!empty($data['holoocode'])) update_post_meta($id, $this->get_holoocode_meta_key(), $data['holoocode']);
+            if (!empty($data['holoocode'])) {
+                update_post_meta($id, $this->get_holoocode_meta_key(), $data['holoocode']);
+            }
             
             $msg = "🎉 محصول با موفقیت اضافه شد!\n\n📦 {$data['title']}";
             if (!empty($data['holoocode'])) $msg .= "\n🔗 شناسه هلو: {$data['holoocode']}";
-            elseif (!empty($data['barcode'])) $msg .= "\n⚠️ بارکد در هلو پیدا نشد";
+            elseif (!empty($data['barcode'])) $msg .= "\n⚠️ بارکد در هلو پیدا نشد، اما به عنوان SKU ثبت شد.";
             $msg .= "\n\nبرای افزودن محصول جدید /add را بزنید";
 
             $this->bale_send($chat_id, $msg);
